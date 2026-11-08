@@ -1,4 +1,6 @@
 --!strict
+--!native
+--!optimize 2
 -- RazorData: centralized DataService with session locking, migrations and DOM serialization.
 local DataStoreService = game:GetService("DataStoreService")
 local HttpService = game:GetService("HttpService")

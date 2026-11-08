@@ -1,4 +1,6 @@
 --!strict
+--!native
+--!optimize 2
 -- Converts Luau/Roblox values to JSON-safe tables and back.
 local Serializer = {}
 
