@@ -1,0 +1,12 @@
+[Package]
+  Name = "vibeonline/razordata"
+  Description = "Oversimplifying the data service"
+  Version = "0.1.0"
+  License = "MIT"
+  Website = "https://sawblade-entertainment.github.io/pkg-razor-data/"
+
+[Tools]
+  StyLua = "JohnnyMorganz/StyLua@2.6.0"
+  Selene = "Kampfkarren/selene@0.32.0"
+
+[Packages]
