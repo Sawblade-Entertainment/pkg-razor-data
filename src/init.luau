@@ -62,7 +62,9 @@ local function safeUpdate(ds: DataStore, key: string, fn: (any, any) -> ...any):
             return true, result
         end
         lastErr = result
-        task.wait(math.min(2 ^ attempt, 30))
+        if attempt < 5 then
+            task.wait(math.min(2 ^ attempt, 30))
+        end
     end
     return false, lastErr
 end

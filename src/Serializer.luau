@@ -1,5 +1,4 @@
 --!strict
---!native
 --!optimize 2
 -- Converts Luau/Roblox values to JSON-safe tables and back.
 local Serializer = {}
@@ -20,6 +19,7 @@ for i = 1, 64 do
     B64I[string.byte(B64, i)] = i - 1
 end
 
+@native
 local function b64encode(s: string): string
     local out = {}
     for i = 1, #s, 3 do
@@ -40,6 +40,7 @@ local function b64encode(s: string): string
     return table.concat(out)
 end
 
+@native
 local function b64decode(s: string): string
     local out = {}
     for i = 1, #s, 4 do
@@ -238,8 +239,13 @@ local function encodeInstance(inst: Instance, seen)
     return { C = inst.ClassName, N = inst.Name, P = props, A = attrs, T = inst:GetTags(), K = children }
 end
 
-local function decodeInstance(t): Instance
-    local inst = Instance.new(t.C)
+local function decodeInstance(t): Instance?
+    -- Non-creatable or since-removed classes are skipped so one bad instance can't block the whole profile.
+    local ok, inst = pcall(Instance.new, t.C)
+    if not ok then
+        warn(`RazorData: cannot recreate instance '{t.N}' of class '{t.C}', skipping`)
+        return nil
+    end
     inst.Name = t.N
     for p, v in t.P or {} do
         pcall(function()
@@ -253,7 +259,10 @@ local function decodeInstance(t): Instance
         inst:AddTag(tag)
     end
     for _, c in t.K or {} do
-        decodeInstance(c).Parent = inst
+        local child = decodeInstance(c)
+        if child then
+            child.Parent = inst
+        end
     end
     return inst
 end
@@ -266,6 +275,7 @@ function Serializer.RegisterType(name: string, is: (any) -> boolean, enc: (any) 
     table.insert(custom, { name = "custom:" .. name, is = is })
 end
 
+@native
 local function isArray(t): boolean
     local n = #t
     local count = 0
@@ -278,6 +288,7 @@ local function isArray(t): boolean
     return count == n
 end
 
+@native
 function encode(value: any, seen: { [any]: boolean }): any
     local t = typeof(value)
     if t == "nil" or t == "boolean" or t == "string" then
@@ -334,6 +345,7 @@ function encode(value: any, seen: { [any]: boolean }): any
     error(`RazorData: cannot serialize type '{t}'`)
 end
 
+@native
 function decode(value: any): any
     if type(value) ~= "table" then
         return value

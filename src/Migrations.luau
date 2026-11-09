@@ -1,6 +1,4 @@
 --!strict
---!native
---!optimize 2
 -- Ordered migrations: Migrations[n] upgrades data from version n-1 to n.
 local Migrations = {}
 Migrations.__index = Migrations
