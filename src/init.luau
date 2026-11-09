@@ -1,6 +1,4 @@
 --!strict
---!native
---!optimize 2
 -- RazorData: centralized DataService with session locking, migrations and DOM serialization.
 local DataStoreService = game:GetService("DataStoreService")
 local HttpService = game:GetService("HttpService")
@@ -98,6 +96,7 @@ function RazorData.new(config: Config)
     self.Migrator = Migrations.new(config.Migrations or {})
     self.DataStore = DataStoreService:GetDataStore(config.Name, config.Scope)
     self.Profiles = {} :: { [string]: any }
+    self._loading = {} :: { [string]: boolean }
     self.AutoSaveInterval = config.AutoSaveInterval or 60
     self.LockTimeout = config.LockTimeout or 1800
     table.insert(activeStores, self)
@@ -119,9 +118,23 @@ end
 -- Loads and session-locks a profile. Returns profile or nil, errorMessage.
 function Store:LoadProfile(key: string | number): (any?, string?)
     key = tostring(key)
+    -- Concurrent loads of the same key wait for the first one instead of building a second profile.
+    while self._loading[key] do
+        task.wait()
+    end
     if self.Profiles[key] then
         return self.Profiles[key], nil
     end
+    self._loading[key] = true
+    local ok, profile, err = pcall(self._loadProfile, self, key)
+    self._loading[key] = nil
+    if not ok then
+        return nil, tostring(profile)
+    end
+    return profile, err
+end
+
+function Store:_loadProfile(key: string): (any?, string?)
     local cfg = self.Config
     local retries = cfg.LoadRetries or 6
     local delay = cfg.RetryDelay or 5
@@ -155,7 +168,19 @@ function Store:LoadProfile(key: string | number): (any?, string?)
             return nil, "Record schema is newer than this server; refusing to load"
         end
         if not blocked and result then
-            return self:_buildProfile(key, result)
+            local profile, err = self:_buildProfile(key, result)
+            if not profile then
+                -- Drop the lock we just took so the player isn't locked out elsewhere.
+                safeUpdate(self.DataStore, key, function(raw)
+                    local rec = normalize(raw)
+                    if not rec or not rec.Lock or rec.Lock.JobId ~= JOB_ID then
+                        return nil
+                    end
+                    rec.Lock = nil
+                    return rec
+                end)
+            end
+            return profile, err
         end
         if attempt < retries then
             task.wait(delay * attempt)
@@ -260,8 +285,18 @@ function Profile:_write(release: boolean): boolean
     end
     self._saving = true
 
-    local encoded = Serializer.Encode(self.Data)
-    local size = #HttpService:JSONEncode(encoded)
+    local okEncode, encoded, size = pcall(function()
+        local e = Serializer.Encode(self.Data)
+        return e, #HttpService:JSONEncode(e)
+    end)
+    if not okEncode then
+        warn(`[RazorData] Encode failed for {self.Key}: {encoded}; save skipped`)
+        self._saving = false
+        if release then
+            self:_shutdown()
+        end
+        return false
+    end
     if size > MAX_BYTES then
         warn(`[RazorData] {self.Key} exceeds 4MB ({size} bytes); save skipped`)
         self._saving = false
@@ -293,7 +328,8 @@ function Profile:_write(release: boolean): boolean
         self:_shutdown()
         return false
     end
-    if ok and release then
+    -- Shut down on release even if the write failed, so autosave stops renewing the lock.
+    if release then
         self:_shutdown()
     end
     return ok
