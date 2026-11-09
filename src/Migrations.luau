@@ -29,6 +29,8 @@ function Migrations:Run(data: any, fromVersion: number): (any, number)
 end
 
 -- Fills missing keys from the template (never overwrites existing values).
+-- Array-shaped template tables are only used as defaults when the key is missing; their
+-- entries are never merged in, so items the player removed don't come back.
 function Migrations.Reconcile(data: any, template: any): any
     if type(data) ~= "table" then
         data = {}
@@ -36,7 +38,7 @@ function Migrations.Reconcile(data: any, template: any): any
     for k, v in template do
         if data[k] == nil then
             data[k] = if type(v) == "table" then Migrations.Reconcile({}, v) else v
-        elseif type(v) == "table" and type(data[k]) == "table" then
+        elseif type(v) == "table" and type(data[k]) == "table" and #v == 0 then
             Migrations.Reconcile(data[k], v)
         end
     end

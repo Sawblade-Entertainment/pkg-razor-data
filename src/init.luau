@@ -46,8 +46,13 @@ local function deepCopy(t: any): any
     return c
 end
 
+-- Overridable so tests can simulate an empty budget without spending real quota.
+function RazorData._getBudget(requestType: Enum.DataStoreRequestType): number
+    return DataStoreService:GetRequestBudgetForRequestType(requestType)
+end
+
 local function waitForBudget(requestType: Enum.DataStoreRequestType)
-    while DataStoreService:GetRequestBudgetForRequestType(requestType) < 1 do
+    while RazorData._getBudget(requestType) < 1 do
         task.wait(1)
     end
 end
@@ -85,6 +90,25 @@ local function normalize(raw: any): any
     rec.Data = raw
     rec.SchemaVersion = 0
     return rec
+end
+
+-- Clears this server's lock without touching the data, so a failed load or release doesn't
+-- block other servers until LockTimeout.
+local function unlock(ds: DataStore, key: string)
+    local ok, err = safeUpdate(ds, key, function(raw, keyInfo: DataStoreKeyInfo?)
+        local rec = normalize(raw)
+        if not rec or not rec.Lock or rec.Lock.JobId ~= JOB_ID then
+            return nil
+        end
+        rec.Lock = nil
+        if keyInfo then
+            return rec, keyInfo:GetUserIds(), keyInfo:GetMetadata()
+        end
+        return rec
+    end)
+    if not ok then
+        warn(`[RazorData] Unlock failed for {key}: {err}`)
+    end
 end
 
 ---------------------------------------------------------------- Store
@@ -170,17 +194,13 @@ function Store:_loadProfile(key: string): (any?, string?)
             return nil, "Record schema is newer than this server; refusing to load"
         end
         if not blocked and result then
-            local profile, err = self:_buildProfile(key, result)
+            local okBuild, profile, err = pcall(self._buildProfile, self, key, result)
+            if not okBuild then
+                profile, err = nil, "Profile build failed: " .. tostring(profile)
+            end
             if not profile then
                 -- Drop the lock we just took so the player isn't locked out elsewhere.
-                safeUpdate(self.DataStore, key, function(raw)
-                    local rec = normalize(raw)
-                    if not rec or not rec.Lock or rec.Lock.JobId ~= JOB_ID then
-                        return nil
-                    end
-                    rec.Lock = nil
-                    return rec
-                end)
+                unlock(self.DataStore, key)
             end
             return profile, err
         end
@@ -218,6 +238,8 @@ function Store:_buildProfile(key: string, rec: any): (any?, string?)
         _schemaVersion = rec.SchemaVersion,
         _active = true,
         _saving = false,
+        _lastSize = nil :: number?,
+        _lastFailed = false,
         _releasedEvent = Instance.new("BindableEvent"),
     }, Profile)
     profile.Released = profile._releasedEvent.Event
@@ -231,36 +253,43 @@ end
 
 -- Optional: wire up player join/leave automatically. Kicks players whose data can't load.
 function Store:BindPlayers(onLoaded: ((Player, any) -> ())?)
-    local function onJoin(player: Player)
-        local profile, err = self:LoadProfile(player.UserId)
-        if not profile then
-            player:Kick("Your data failed to load, please rejoin. (" .. tostring(err) .. ")")
-            return
-        end
-        profile:AddUserId(player.UserId)
-        if not player:IsDescendantOf(Players) then
-            profile:Release()
-            return
-        end
-        profile.Released:Connect(function()
-            if player:IsDescendantOf(Players) then
-                player:Kick("Your data was loaded on another server.")
-            end
-        end)
-        if onLoaded then
-            onLoaded(player, profile)
-        end
-    end
     for _, p in Players:GetPlayers() do
-        task.spawn(onJoin, p)
+        task.spawn(self._playerJoined, self, p, onLoaded)
     end
-    Players.PlayerAdded:Connect(onJoin)
+    Players.PlayerAdded:Connect(function(player)
+        self:_playerJoined(player, onLoaded)
+    end)
     Players.PlayerRemoving:Connect(function(player)
-        local profile = self:GetProfile(player.UserId)
-        if profile then
-            profile:Release()
+        self:_playerLeft(player)
+    end)
+end
+
+function Store:_playerJoined(player: Player, onLoaded: ((Player, any) -> ())?)
+    local profile, err = self:LoadProfile(player.UserId)
+    if not profile then
+        player:Kick("Your data failed to load, please rejoin. (" .. tostring(err) .. ")")
+        return
+    end
+    profile:AddUserId(player.UserId)
+    if not player:IsDescendantOf(Players) then
+        profile:Release()
+        return
+    end
+    profile.Released:Connect(function(reason: string)
+        if reason == "LostLock" and player:IsDescendantOf(Players) then
+            player:Kick("Your data was loaded on another server.")
         end
     end)
+    if onLoaded then
+        onLoaded(player, profile)
+    end
+end
+
+function Store:_playerLeft(player: Player)
+    local profile = self:GetProfile(player.UserId)
+    if profile then
+        profile:Release()
+    end
 end
 
 ---------------------------------------------------------------- Profile
@@ -287,22 +316,23 @@ function Profile:_write(release: boolean): boolean
     end
     self._saving = true
 
+    -- Measuring size costs a full JSONEncode, so only do it while the profile could be near the limit.
+    -- Releases always measure: an oversized final write would fail and leave the lock behind.
+    local measure = release or self._lastSize == nil or self._lastSize > MAX_BYTES // 2 or self._lastFailed
     local okEncode, encoded, size = pcall(function()
         local e = Serializer.Encode(self.Data)
-        return e, #HttpService:JSONEncode(e)
+        return e, if measure then #HttpService:JSONEncode(e) else nil
     end)
     if not okEncode then
         warn(`[RazorData] Encode failed for {self.Key}: {encoded}; save skipped`)
-        self._saving = false
-        if release then
-            self:_shutdown()
-        end
-        return false
+        return self:_skipWrite(release)
     end
-    if size > MAX_BYTES then
-        warn(`[RazorData] {self.Key} exceeds 4MB ({size} bytes); save skipped`)
-        self._saving = false
-        return false
+    if size then
+        self._lastSize = size
+        if size > MAX_BYTES then
+            warn(`[RazorData] {self.Key} exceeds 4MB ({size} bytes); save skipped`)
+            return self:_skipWrite(release)
+        end
     end
 
     local lostLock = false
@@ -320,21 +350,39 @@ function Profile:_write(release: boolean): boolean
         rec.Lock = if release then nil else { JobId = JOB_ID, PlaceId = game.PlaceId, Timestamp = os.time() }
         return rec, self.UserIds
     end)
-    self._saving = false
+    self._lastFailed = not ok
 
     if not ok then
         warn(`[RazorData] Save failed for {self.Key}: {err}`)
+        if release then
+            -- Best effort: the write may have failed for a reason the lock-only update avoids.
+            unlock(self._store.DataStore, self.Key)
+        end
     end
+    self._saving = false
     if lostLock then
         warn(`[RazorData] Session lock for {self.Key} was taken by another server`)
-        self:_shutdown()
+        self:_shutdown("LostLock")
         return false
     end
     -- Shut down on release even if the write failed, so autosave stops renewing the lock.
     if release then
-        self:_shutdown()
+        self:_shutdown("Released")
     end
     return ok
+end
+
+-- Data that can't be written is kept as last saved; a release still frees the lock and shuts down.
+-- The lock is cleared before shutdown so a reload on this server can't take it first and lose it.
+function Profile:_skipWrite(release: boolean): boolean
+    if release then
+        unlock(self._store.DataStore, self.Key)
+    end
+    self._saving = false
+    if release then
+        self:_shutdown("Released")
+    end
+    return false
 end
 
 function Profile:Save(): boolean
@@ -345,33 +393,42 @@ function Profile:Release(): boolean
     return self:_write(true)
 end
 
-function Profile:_shutdown()
+-- Released fires with "LostLock" (another server took the session) or "Released".
+function Profile:_shutdown(reason: string)
     if not self._active then
         return
     end
     self._active = false
     self._store.Profiles[self.Key] = nil
-    self._releasedEvent:Fire()
+    self._releasedEvent:Fire(reason)
     self._releasedEvent:Destroy()
 end
 
 ---------------------------------------------------------------- Shutdown
 
-game:BindToClose(function()
+-- Releases every loaded profile, waiting at most `timeout` seconds (the server allows 25 on close).
+function RazorData._releaseAll(timeout: number?)
     local pending = 0
     for _, store in activeStores do
         for _, profile in store.Profiles do
             pending += 1
             task.spawn(function()
-                profile:Release()
+                local ok, err = pcall(profile.Release, profile)
+                if not ok then
+                    warn(`[RazorData] Release failed for {profile.Key} on shutdown: {err}`)
+                end
                 pending -= 1
             end)
         end
     end
     local start = os.clock()
-    while pending > 0 and os.clock() - start < 25 do
+    while pending > 0 and os.clock() - start < (timeout or 25) do
         task.wait()
     end
+end
+
+game:BindToClose(function()
+    RazorData._releaseAll()
 end)
 
 return RazorData
