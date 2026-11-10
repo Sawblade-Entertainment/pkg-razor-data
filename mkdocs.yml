@@ -16,3 +16,13 @@ plugins:
 
 extra_javascript:
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Guides:
+      - Profiles: profiles.md
+      - Session Locking: session-locking.md
+      - Migrations: migrations.md
+      - Serialization: serialization.md
+  - API Reference: api.md
