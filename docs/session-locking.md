@@ -19,7 +19,7 @@ Every key is stored as a record:
 All reads and writes go through `UpdateAsync`, so checking and setting the lock happens in one atomic step.
 
 - **Load** takes the lock if it's empty, already owned by this server, or older than `LockTimeout`. Otherwise it waits and retries.
-- **Save** writes only if this server still owns the lock, and renews the lock's timestamp. If another server owns it, the profile shuts down with `"LostLock"`.
+- **Save** writes only if this server still owns the lock, and renews the lock's timestamp. If the lock is missing or owned by another server, nothing is written and the profile shuts down with `"LostLock"`. A missing lock means another server took the key over and released it, so this server's copy is stale.
 - **Release** writes the data and sets `Lock` to `nil` in one write.
 
 In Studio `game.JobId` is empty, so each Studio session uses a random `studio-<guid>` ID instead.

@@ -43,8 +43,10 @@ Possible error messages:
 | `Record schema is newer than this server; refusing to load` | The save was written by a newer version of your game with more migrations. See [Migrations](migrations.md#rolling-updates). |
 | `Decode failed: ...` | The stored data couldn't be deserialized. |
 | `Migration failed: ...` | One of your migration functions errored. |
+| `Profile build failed: ...` | An unexpected error while building the profile, for example in reconcile. |
+| Anything else | `LoadProfile` itself errored unexpectedly. The message is the raw error. |
 
-When a load fails after the lock was taken, Razor Data clears the lock again so the player isn't locked out of other servers.
+When a load fails after the lock was taken, Razor Data clears the lock again so the player isn't locked out of other servers. Note that the record has already been written at that point: `Meta.LoadCount` and `Meta.LastLoaded` are updated, and a legacy value is wrapped in a Razor Data record. See [Migrations](migrations.md#when-migrations-run).
 
 ## Data and Meta
 
@@ -56,7 +58,7 @@ When a load fails after the lock was taken, Razor Data clears the lock again so 
 | --- | --- |
 | `LoadCount` | How many times this key has been loaded. |
 | `LastLoaded` | `os.time()` of the most recent load. |
-| `LastSaved` | `os.time()` of the most recent successful save. |
+| `LastSaved` | `os.time()` of the most recent successful save. It's only updated on the profile after the write is confirmed, so a failed save leaves it unchanged. |
 
 `Meta` is saved along with the data, so you can add your own fields to it if you want to keep bookkeeping separate from game data.
 
@@ -81,7 +83,7 @@ When a save is skipped, the last successful save is left in the DataStore. Measu
 profile:Release()
 ```
 
-`Release` does a final save and clears the lock in the same write. If the save fails or is skipped, the lock is still cleared, so the player can join another server straight away instead of waiting for the lock to time out.
+`Release` does a final save and clears the lock in the same write. If the save fails or is skipped, Razor Data makes a second, lock-only write so the player can join another server straight away. That second write can also fail, for example during a DataStore outage. If it does, a warning is logged and the lock expires on its own after `LockTimeout`.
 
 ## The Released event
 
@@ -110,4 +112,4 @@ Each store saves all its loaded profiles every `AutoSaveInterval` seconds. Every
 
 ## Server shutdown
 
-Razor Data binds `game:BindToClose` and releases every loaded profile in every store. Releases run in parallel and it waits up to 25 seconds, which is the time Roblox gives a server to close.
+Razor Data binds `game:BindToClose` and releases every loaded profile in every store. Releases run in parallel and it waits up to 25 seconds. Roblox gives `BindToClose` callbacks 30 seconds in total, so the 25-second wait leaves a margin for the last writes to finish. If you bind your own shutdown work, it shares that same 30-second budget.

@@ -730,6 +730,25 @@ local function storeTests(available: boolean)
         expectEq(readRaw(key).Lock.JobId, "other-server", "stored lock owner")
     end)
 
+    test("Save refuses to write when another server took and released the lock", function()
+        local key = freshKey("stalelock")
+        local profile = load(store, key)
+        local reason = watchReleased(profile)
+        -- Simulate another server taking over a dead lock, saving newer data, then releasing.
+        rawStore:UpdateAsync(key, function(rec)
+            rec.Data = { Coins = 99 }
+            rec.Lock = nil
+            return rec
+        end)
+        profile.Data.Coins = 1
+        expect(not profile:Save(), "Save returned true")
+        expectEq(reason(), "LostLock", "Released reason")
+        expect(not profile:IsActive(), "still active")
+        local rec = readRaw(key)
+        expectEq(rec.Data.Coins, 99, "newer data overwritten")
+        expectEq(rec.Lock, nil, "stored lock")
+    end)
+
     describe("Store: save guards")
 
     test("unencodable data skips the save but keeps the profile", function()
@@ -825,11 +844,15 @@ local function storeTests(available: boolean)
             local key = freshKey("writefail")
             local profile = load(store, key)
             expect(profile:Save(), "first Save returned false")
+            local lastSaved = profile.Meta.LastSaved
+            expect(lastSaved, "LastSaved missing after first Save")
+            task.wait(1.1) -- so a wrongly stamped LastSaved would differ from the first save's
             profile.Data.Coins = 99
             profile.UserIds = { "not-a-number" :: any } -- UpdateAsync rejects the write (error 513)
             local reason = watchReleased(profile)
             expect(not profile:Release(), "Release returned true")
             expectEq(reason(), "Released", "Released reason")
+            expectEq(profile.Meta.LastSaved, lastSaved, "failed write changed LastSaved")
             local rec = readRaw(key)
             expectEq(rec.Lock, nil, "stored lock")
             expectEq(rec.Data.Coins, 0, "failed write changed the data")

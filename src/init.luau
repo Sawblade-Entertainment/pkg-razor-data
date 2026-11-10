@@ -336,21 +336,31 @@ function Profile:_write(release: boolean): boolean
     end
 
     local lostLock = false
+    local savedAt = 0
     local ok, err = safeUpdate(self._store.DataStore, self.Key, function(raw)
         lostLock = false
         local rec = normalize(raw) or newRecord()
-        if rec.Lock and rec.Lock.JobId ~= JOB_ID then
+        -- Only write while this server owns the lock. An empty lock means another server took
+        -- the key and released it, so our data is stale and must not be written back.
+        if not rec.Lock or rec.Lock.JobId ~= JOB_ID then
             lostLock = true
             return nil
         end
+        local now = os.time()
+        -- Stamp a copy so Meta.LastSaved only changes on the profile once the write succeeds.
+        local meta = table.clone(self.Meta)
+        meta.LastSaved = now
+        savedAt = now
         rec.Data = encoded
         rec.SchemaVersion = self._schemaVersion
-        rec.Meta = self.Meta
-        rec.Meta.LastSaved = os.time()
-        rec.Lock = if release then nil else { JobId = JOB_ID, PlaceId = game.PlaceId, Timestamp = os.time() }
+        rec.Meta = meta
+        rec.Lock = if release then nil else { JobId = JOB_ID, PlaceId = game.PlaceId, Timestamp = now }
         return rec, self.UserIds
     end)
     self._lastFailed = not ok
+    if ok and not lostLock then
+        self.Meta.LastSaved = savedAt
+    end
 
     if not ok then
         warn(`[RazorData] Save failed for {self.Key}: {err}`)
@@ -406,7 +416,8 @@ end
 
 ---------------------------------------------------------------- Shutdown
 
--- Releases every loaded profile, waiting at most `timeout` seconds (the server allows 25 on close).
+-- Releases every loaded profile, waiting at most `timeout` seconds. Roblox gives BindToClose 30
+-- seconds, so the default of 25 leaves a margin for the last writes to finish.
 function RazorData._releaseAll(timeout: number?)
     local pending = 0
     for _, store in activeStores do

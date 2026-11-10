@@ -42,7 +42,7 @@ When a profile loads, every migration after the record's stored `SchemaVersion` 
 
 New profiles start as a copy of the template at the latest version, so no migrations run for them.
 
-If a migration errors, the load fails with `Migration failed: ...` and the stored data isn't changed.
+If a migration errors, the load fails with `Migration failed: ...` and the lock is cleared again. The stored `Data` and `SchemaVersion` aren't changed, so the save will be migrated again on the next load once you fix the migration. The record itself has already been written by then: `Meta.LoadCount` and `Meta.LastLoaded` are updated, and a legacy value is wrapped in a Razor Data record (see [Legacy data](#legacy-data)).
 
 ## Rules
 
@@ -84,7 +84,7 @@ Migrations = {
 }
 ```
 
-Point `Name` (and `Scope`, if you used one) at the existing DataStore. A key is wrapped in a Razor Data record as soon as it loads, so your old code can't read it after that. Test the conversion on a copy of your data first.
+Point `Name` (and `Scope`, if you used one) at the existing DataStore. A key is wrapped in a Razor Data record as soon as it loads, even if the load then fails in a migration, so your old code can't read it after that. Test the conversion on a copy of your data first.
 
 ## Using the migrator directly
 

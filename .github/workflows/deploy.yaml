@@ -45,13 +45,13 @@ jobs:
 
       - name: ChainLink Build
         shell: bash
-        run: chainlink build RazorInput.rbxm
+        run: chainlink build RazorData.rbxm
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
         with:
-          name: razorinput-build
-          path: RazorInput.rbxm
+          name: razordata-build
+          path: RazorData.rbxm
           if-no-files-found: error
 
   deploy:
@@ -72,7 +72,7 @@ jobs:
       - name: Download release artifact
         uses: actions/download-artifact@v5
         with:
-          name: razorinput-build
+          name: razordata-build
           path: ./release
 
       - name: Deploy to GitHub Pages
@@ -101,10 +101,10 @@ jobs:
       - name: Download release artifact
         uses: actions/download-artifact@v5
         with:
-          name: razorinput-build
+          name: razordata-build
           path: ./release
 
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
-          files: ./release/RazorInput.rbxm
+          files: ./release/RazorData.rbxm

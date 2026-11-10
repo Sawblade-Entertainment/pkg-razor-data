@@ -31,7 +31,7 @@ end)
 With [ChainLink](https://github.com/Sawblade-Entertainment/ChainLink) or Wally, add it to your dependencies:
 
 ```toml
-razordata = "vibeonline/razordata@0.1.1"
+razordata = "vibeonline/razordata@0.1.3"
 ```
 
 Then require it on the server:
@@ -44,7 +44,7 @@ local RazorData = use "razordata"
 local RazorData = require(ServerScriptService.Packages.razordata)
 ```
 
-You can also download a prebuilt `RazorInput.rbxm` from the [GitHub releases](https://github.com/Sawblade-Entertainment/pkg-razor-data/releases).
+You can also download a prebuilt `RazorData.rbxm` from the [GitHub releases](https://github.com/Sawblade-Entertainment/pkg-razor-data/releases).
 
 ## Next steps
 

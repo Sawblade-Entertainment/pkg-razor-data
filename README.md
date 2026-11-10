@@ -4,7 +4,7 @@ Dead simple save data handling
 
 Download with chainlink (or wally):
 ```
-razordata = "vibeonline/razordata@0.1.0"
+razordata = "vibeonline/razordata@0.1.3"
 ```
 
 # Project Structure

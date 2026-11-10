@@ -80,6 +80,8 @@ profile:Save()
 If you need more control, for example to load non-player keys or to show a loading screen, you can manage profiles yourself:
 
 ```lua
+local Players = game:GetService("Players")
+
 Players.PlayerAdded:Connect(function(player)
     local profile, err = PlayerData:LoadProfile(player.UserId)
     if not profile then
@@ -94,7 +96,8 @@ Players.PlayerAdded:Connect(function(player)
     end
 
     profile.Released:Connect(function(reason)
-        if reason == "LostLock" then
+        -- Check they're still here: the lock can be lost after they leave.
+        if reason == "LostLock" and player:IsDescendantOf(Players) then
             player:Kick("Your data was loaded on another server.")
         end
     end)

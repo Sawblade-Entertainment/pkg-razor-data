@@ -142,7 +142,7 @@ Yields. Saves the data and renews the lock. Returns `false` if the save failed, 
 profile:Release(): boolean
 ```
 
-Yields. Saves the data, clears the lock and makes the profile inactive. The lock is cleared and the profile is shut down even if the save fails. Returns whether the save worked.
+Yields. Saves the data, clears the lock and makes the profile inactive. If the save fails, the profile is still shut down and a lock-only write is attempted; if that write fails too, the lock expires after `LockTimeout`. Returns whether the save worked. See [Releasing](profiles.md#releasing).
 
 ### Profile:AddUserId
 
